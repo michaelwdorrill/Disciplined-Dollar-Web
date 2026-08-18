@@ -48,6 +48,18 @@ function formatDollars(cents) {
   const abs = Math.abs(value).toFixed(2);
   return value < 0 ? `-$${abs}` : `$${abs}`;
 }
+// Like formatDollars, but always shows an explicit sign — used only for
+// "On Target" so under/over budget is visually unambiguous at a glance
+// (matches the Android app's formatDollarsWithSign).
+function formatDollarsWithSign(value) {
+  const abs = Math.abs(value).toFixed(2);
+  return value >= 0 ? `+$${abs}` : `-$${abs}`;
+}
+
+function daysInMonth(year, month) {
+  // Day 0 of the NEXT month = the last day of THIS month.
+  return new Date(year, month, 0).getDate();
+}
 
 // ---- app state ----
 let transactions = []; // full cache — mirrors TransactionRepository's approach
@@ -169,6 +181,21 @@ function renderMain() {
   // automatically when a legacy row is present, without special-casing it.
   const availableSources = [...new Set(monthTx.map((t) => t.source))].sort();
 
+  // Days Left / Per Day / On Target — matches the Android app's
+  // DashboardMetrics exactly (CurrentMonthViewModel.kt / MonthDetailViewModel
+  // .kt). Only the ACTUAL current calendar month gets live daily-pace math;
+  // any other viewed month (past or future) is treated as fully elapsed —
+  // same distinction Android draws between CurrentMonthViewModel(isArchive=
+  // false) and MonthDetailViewModel (always "archived").
+  const today = new Date();
+  const isCurrentMonth = viewYear === today.getFullYear() && viewMonth === today.getMonth() + 1;
+  const totalDaysInMonth = daysInMonth(viewYear, viewMonth);
+  const currentDay = isCurrentMonth ? today.getDate() : totalDaysInMonth;
+  const daysRemaining = isCurrentMonth ? Math.max(1, totalDaysInMonth - currentDay + 1) : 0;
+  const totalRemainingDollars = TOTAL_BUDGET - totalSpentCents / 100;
+  const perDay = daysRemaining > 0 ? totalRemainingDollars / daysRemaining : 0;
+  const onTarget = (TOTAL_BUDGET * currentDay) / totalDaysInMonth - totalSpentCents / 100;
+
   root.innerHTML = `
     <div class="top-bar">
       <h1>Disciplined Dollar</h1>
@@ -207,6 +234,20 @@ function renderMain() {
           </tr>
         </tbody>
       </table>
+    </div>
+    <div class="metrics-row">
+      <div class="metric-card">
+        <div class="metric-label">Days Left</div>
+        <div class="metric-value">${daysRemaining}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Per Day</div>
+        <div class="metric-value">${formatDollars(Math.round(perDay * 100))}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">On Target</div>
+        <div class="metric-value ${onTarget >= 0 ? "positive" : "negative"}">${formatDollarsWithSign(onTarget)}</div>
+      </div>
     </div>
     ${renderFilterPanel(availableSources)}
     <div class="card">

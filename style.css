@@ -282,3 +282,37 @@ table.summary .over {
 .filter-row-2 > div {
   flex: 1;
 }
+
+.metrics-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.metric-card {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  text-align: center;
+}
+
+.metric-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.metric-value {
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin-top: 4px;
+}
+
+.metric-value.positive {
+  color: var(--primary);
+}
+
+.metric-value.negative {
+  color: var(--danger);
+}
