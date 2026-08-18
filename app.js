@@ -1,4 +1,4 @@
-import { CATEGORIES, BUDGETED, TOTAL_BUDGET } from "./config.js";
+import { CATEGORIES, SOURCES, BUDGETED, TOTAL_BUDGET } from "./config.js";
 import * as auth from "./auth.js";
 import * as api from "./api.js";
 
@@ -61,6 +61,38 @@ function setViewToToday() {
 }
 setViewToToday();
 
+// A purely display-time filter over the currently-viewed month's already-
+// loaded transactions — never touches the network, never affects the budget
+// summary table (that answers "how am I doing this month" for the WHOLE
+// month; the filter is a "help me find one transaction" tool — same
+// separation of concerns as the Android app's TransactionFilter). `null` in
+// any field means "no constraint on that field." Reset whenever the viewed
+// month changes, so a filter set for one month doesn't silently carry over
+// and hide rows in the next.
+let filter = { category: null, source: null, dateFrom: null, dateTo: null, amountMin: null, amountMax: null };
+let filterExpanded = false;
+
+function isFilterActive(f) {
+  return Object.values(f).some((v) => v !== null);
+}
+
+function applyFilter(txs, f) {
+  if (!isFilterActive(f)) return txs;
+  return txs.filter((t) => {
+    if (f.category !== null && t.category !== f.category) return false;
+    if (f.source !== null && t.source !== f.source) return false;
+    if (f.dateFrom !== null && t.date < f.dateFrom) return false;
+    if (f.dateTo !== null && t.date > f.dateTo) return false;
+    // Compared against the signed dollar amount (a refund is negative), not
+    // its magnitude — so amountMin = 0 excludes refunds rather than
+    // requiring the user to think in absolute value.
+    const amount = t.amountCents / 100;
+    if (f.amountMin !== null && amount < f.amountMin) return false;
+    if (f.amountMax !== null && amount > f.amountMax) return false;
+    return true;
+  });
+}
+
 function shiftMonth(delta) {
   let m = viewMonth + delta;
   let y = viewYear;
@@ -74,6 +106,8 @@ function shiftMonth(delta) {
   }
   viewMonth = m;
   viewYear = y;
+  filter = { category: null, source: null, dateFrom: null, dateTo: null, amountMin: null, amountMax: null };
+  filterExpanded = false;
 }
 
 // A 401 on any Budget API call (session revoked/expired server-side) signs
@@ -121,12 +155,19 @@ function txForViewMonth() {
 
 function renderMain() {
   const monthTx = txForViewMonth().sort((a, b) => b.date - a.date || b.createdAt - a.createdAt);
+  const filteredTx = applyFilter(monthTx, filter);
 
+  // Budget summary always reflects the WHOLE month, never the filtered
+  // subset — see the `filter`/`applyFilter` comment above.
   const spentByCat = {};
   for (const cat of CATEGORIES) spentByCat[cat] = 0;
   for (const t of monthTx) spentByCat[t.category] = (spentByCat[t.category] || 0) + t.amountCents;
   const totalSpentCents = monthTx.reduce((a, t) => a + t.amountCents, 0);
   const totalBudgetCents = Math.round(TOTAL_BUDGET * 100);
+
+  // Only sources actually present this month — includes "Unknown"
+  // automatically when a legacy row is present, without special-casing it.
+  const availableSources = [...new Set(monthTx.map((t) => t.source))].sort();
 
   root.innerHTML = `
     <div class="top-bar">
@@ -167,8 +208,17 @@ function renderMain() {
         </tbody>
       </table>
     </div>
+    ${renderFilterPanel(availableSources)}
     <div class="card">
-      ${monthTx.length === 0 ? `<div class="empty-state">No transactions this month.</div>` : monthTx.map(renderTxRow).join("")}
+      <div class="tx-list-header">
+        <span>Transactions</span>
+        ${isFilterActive(filter) ? `<span class="tx-count">${filteredTx.length} of ${monthTx.length}</span>` : ""}
+      </div>
+      ${
+        filteredTx.length === 0
+          ? `<div class="empty-state">${monthTx.length === 0 ? "No transactions this month." : "No transactions match these filters."}</div>`
+          : filteredTx.map(renderTxRow).join("")
+      }
     </div>
   `;
 
@@ -185,8 +235,109 @@ function renderMain() {
     shiftMonth(1);
     renderMain();
   };
-  for (const t of monthTx) {
+  for (const t of filteredTx) {
     document.getElementById(`tx-${t.id}`).onclick = () => openTxModal(t);
+  }
+  wireFilterPanel();
+}
+
+// ---- filter panel ----
+function renderFilterPanel(availableSources) {
+  const active = isFilterActive(filter);
+  return `
+    <div class="card">
+      <div class="filter-header" id="filter-toggle">
+        <span class="filter-title">
+          Filters
+          ${active ? `<span class="filter-dot"></span>` : ""}
+        </span>
+        <span class="filter-chevron">${filterExpanded ? "&and;" : "&or;"}</span>
+      </div>
+      ${
+        filterExpanded
+          ? `
+        <div class="filter-body">
+          <label for="ff-category">Category</label>
+          <select id="ff-category">
+            <option value="" ${filter.category === null ? "selected" : ""}>All Categories</option>
+            ${CATEGORIES.map((c) => `<option value="${c}" ${filter.category === c ? "selected" : ""}>${c}</option>`).join("")}
+          </select>
+          <label for="ff-source">Source</label>
+          <select id="ff-source">
+            <option value="" ${filter.source === null ? "selected" : ""}>All Sources</option>
+            ${availableSources.map((s) => `<option value="${escapeAttr(s)}" ${filter.source === s ? "selected" : ""}>${escapeHtml(s)}</option>`).join("")}
+          </select>
+          <div class="filter-row-2">
+            <div>
+              <label for="ff-date-from">From</label>
+              <input type="date" id="ff-date-from" value="${filter.dateFrom !== null ? epochToDateInputValue(filter.dateFrom) : ""}" />
+            </div>
+            <div>
+              <label for="ff-date-to">To</label>
+              <input type="date" id="ff-date-to" value="${filter.dateTo !== null ? epochToDateInputValue(filter.dateTo) : ""}" />
+            </div>
+          </div>
+          <div class="filter-row-2">
+            <div>
+              <label for="ff-amount-min">Min $</label>
+              <input type="number" step="0.01" id="ff-amount-min" value="${filter.amountMin !== null ? filter.amountMin : ""}" />
+            </div>
+            <div>
+              <label for="ff-amount-max">Max $</label>
+              <input type="number" step="0.01" id="ff-amount-max" value="${filter.amountMax !== null ? filter.amountMax : ""}" />
+            </div>
+          </div>
+          ${active ? `<button class="btn-secondary" id="ff-clear" style="width:100%;margin-top:12px">Clear filters</button>` : ""}
+        </div>
+      `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function wireFilterPanel() {
+  document.getElementById("filter-toggle").onclick = () => {
+    filterExpanded = !filterExpanded;
+    renderMain();
+  };
+  if (!filterExpanded) return;
+
+  document.getElementById("ff-category").onchange = (e) => {
+    filter = { ...filter, category: e.target.value || null };
+    renderMain();
+  };
+  document.getElementById("ff-source").onchange = (e) => {
+    filter = { ...filter, source: e.target.value || null };
+    renderMain();
+  };
+  document.getElementById("ff-date-from").onchange = (e) => {
+    filter = { ...filter, dateFrom: e.target.value ? dateInputValueToEpoch(e.target.value) : null };
+    renderMain();
+  };
+  document.getElementById("ff-date-to").onchange = (e) => {
+    filter = { ...filter, dateTo: e.target.value ? dateInputValueToEpoch(e.target.value) : null };
+    renderMain();
+  };
+  // Amount fields re-render on 'change' (blur/enter), not 'input' — a full
+  // re-render on every keystroke would steal focus mid-typing (innerHTML
+  // replaces the DOM node the user is typing into).
+  document.getElementById("ff-amount-min").onchange = (e) => {
+    const v = e.target.value === "" ? null : Number(e.target.value);
+    filter = { ...filter, amountMin: Number.isFinite(v) ? v : null };
+    renderMain();
+  };
+  document.getElementById("ff-amount-max").onchange = (e) => {
+    const v = e.target.value === "" ? null : Number(e.target.value);
+    filter = { ...filter, amountMax: Number.isFinite(v) ? v : null };
+    renderMain();
+  };
+  const clearBtn = document.getElementById("ff-clear");
+  if (clearBtn) {
+    clearBtn.onclick = () => {
+      filter = { category: null, source: null, dateFrom: null, dateTo: null, amountMin: null, amountMax: null };
+      renderMain();
+    };
   }
 }
 
@@ -195,7 +346,7 @@ function renderTxRow(t) {
   return `<div class="tx-row" id="tx-${t.id}">
     <div>
       <div>${escapeHtml(t.purchase)}</div>
-      <div class="tx-meta">${escapeHtml(t.category)} &bull; ${formatDisplayDate(t.date)}</div>
+      <div class="tx-meta">${escapeHtml(t.category)} &bull; ${escapeHtml(t.source)} &bull; ${formatDisplayDate(t.date)}</div>
     </div>
     <div class="tx-amount ${isRefund ? "refund" : ""}">${formatDollars(t.amountCents)}</div>
   </div>`;
@@ -226,6 +377,18 @@ function openTxModal(existing) {
       <label for="f-category">Category</label>
       <select id="f-category">
         ${CATEGORIES.map((c) => `<option value="${c}" ${existing?.category === c ? "selected" : ""}>${c}</option>`).join("")}
+      </select>
+      <label for="f-source">Source</label>
+      <select id="f-source">
+        ${
+          // A legacy row can carry "Unknown" (not in SOURCES — see config.js).
+          // Show it as an extra, pre-selected option rather than silently
+          // defaulting to a real source the user didn't choose.
+          existing && existing.source && !SOURCES.includes(existing.source)
+            ? `<option value="${escapeAttr(existing.source)}" selected>${escapeHtml(existing.source)}</option>`
+            : ""
+        }
+        ${SOURCES.map((s) => `<option value="${s}" ${existing?.source === s ? "selected" : ""}>${s}</option>`).join("")}
       </select>
       <div class="error" id="f-error" style="display:none"></div>
       <div class="modal-actions">
@@ -283,6 +446,7 @@ function openTxModal(existing) {
     const isRefundChecked = document.getElementById("f-refund").checked;
     const purchase = document.getElementById("f-purchase").value.trim();
     const category = document.getElementById("f-category").value;
+    const source = document.getElementById("f-source").value;
 
     const magnitudeNum = Number(amountStr);
     if (!dateStr || !amountStr || !Number.isFinite(magnitudeNum) || magnitudeNum <= 0) {
@@ -300,13 +464,14 @@ function openTxModal(existing) {
       if (isEdit) {
         await api.updateTransaction(existing.id, {
           category,
+          source,
           purchase,
           amountCents,
           date,
           expectedUpdatedAt: existing.updatedAt,
         });
       } else {
-        await api.createTransaction({ id: crypto.randomUUID(), category, purchase, amountCents, date });
+        await api.createTransaction({ id: crypto.randomUUID(), category, source, purchase, amountCents, date });
       }
       close();
       await loadAndRenderMain();

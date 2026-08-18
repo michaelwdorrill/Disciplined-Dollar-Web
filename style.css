@@ -228,3 +228,57 @@ table.summary .over {
   text-align: center;
   padding: 24px 0;
 }
+
+.tx-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.tx-count {
+  font-weight: 400;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.filter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.filter-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.filter-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  display: inline-block;
+}
+
+.filter-chevron {
+  color: var(--text-dim);
+}
+
+.filter-body {
+  margin-top: 4px;
+}
+
+.filter-row-2 {
+  display: flex;
+  gap: 12px;
+}
+
+.filter-row-2 > div {
+  flex: 1;
+}

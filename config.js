@@ -14,6 +14,13 @@ export const CATEGORIES = [
   "Bills",
 ];
 
+// Which card/account paid for it. Mirrors workers/budget/src/sources.ts and
+// BudgetConstants.SOURCES in the Android app. Note: a transaction can read
+// back with source "Unknown" (rows written before this field existed) even
+// though it's not one of these — see api.js/app.js, which treat that as a
+// display-only value never offered as a picker choice.
+export const SOURCES = ["Citi", "Capital One", "Discover", "Venmo", "Schwab"];
+
 export const BUDGETED = {
   Supermarket: 600,
   Restaurants: 300,
