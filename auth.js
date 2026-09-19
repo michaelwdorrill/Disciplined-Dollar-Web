@@ -94,6 +94,20 @@ async function refreshJwt(sessionToken) {
     method: "POST",
     headers: { Authorization: `Bearer ${sessionToken}` },
   });
+  // A 401 here means the 30-day Budget session itself is gone server-side —
+  // expired, revoked, or invalidated by a password reset / TOTP rotation /
+  // epoch bump (see the /token endpoint in workers/auth/src/budget-auth.ts).
+  // Clear local state for the same reason api.js's 401 hook does: every
+  // caller checks isSignedIn() after an error and bounces to the login
+  // screen. Without this the page stayed "signed in" holding a dead session
+  // token and rendered the server's raw "unauthorized" behind a Retry button
+  // that could never succeed, with no way out but clearing localStorage by
+  // hand. Note this 401 arrives from the AUTH Worker, before any Budget API
+  // call is made, so api.js's hook never sees it.
+  if (response.status === 401) {
+    storage.clear();
+    throw new AuthError("Session expired — please sign in again.", 401);
+  }
   const body = await bodyOrThrow(response, "Session expired — please sign in again.");
   const expiresAt = decodeJwtExpiryMs(body.token) ?? Date.now() + 14 * 60 * 1000;
   storage.cacheJwt(body.token, expiresAt);
